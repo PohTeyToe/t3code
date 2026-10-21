@@ -158,7 +158,8 @@ on each selected environment, and reset returns to the environment's shared list
 
 To bring in Claude Code and Codex conversations that ran in the project's folders during the last
 30 days, select **Import** in the **Import sessions** row. Run it again to pick up newer
-conversations; ones already imported are skipped.
+conversations; ones already imported are skipped. One run imports up to 100 conversations, so a
+large backlog takes a few runs.
 
 Settings a repository can also declare in `t3.json`, such as the workspace for new threads,
 resolve in one order: a project override, then the environment setting, then `t3.json`, then the

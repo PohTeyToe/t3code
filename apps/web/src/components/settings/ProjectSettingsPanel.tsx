@@ -25,7 +25,8 @@ import {
   type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../../sidebarProjectGrouping";
-import { agentSessionImport } from "../../state/agentSessions";
+import { agentSessionImport, agentSessionRescan } from "../../state/agentSessions";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { useThreadShells, waitForProjectRemoval } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
@@ -186,6 +187,7 @@ function ProjectDetail({
   const deleteProject = useOrchestrationCommand(projectEnvironment.delete, {
     reportFailure: false,
   });
+  const rescanSessions = useAtomCommand(agentSessionRescan, { reportFailure: false });
   const importSessions = useOrchestrationCommand(agentSessionImport, { reportFailure: false });
   const projectNameEditedRef = useRef(false);
 
@@ -297,6 +299,10 @@ function ProjectDetail({
 
   // Onboarding imports in bulk; this reruns the same idempotent import for a project that
   // already exists, e.g. to pick up sessions started in a terminal after setup.
+  // Checkouts import independently, so one this connection cannot change does not block the rest.
+  const importableMembers = group.memberProjects.filter((member) =>
+    editableIds.has(member.environmentId),
+  );
   const [isImportingSessions, setIsImportingSessions] = useState(false);
   const importMemberSessions = async () => {
     setIsImportingSessions(true);
@@ -304,17 +310,26 @@ function ProjectDetail({
     let skippedCount = 0;
     let succeededCount = 0;
     try {
-      // One offline checkout must not block the others.
-      for (const member of group.memberProjects) {
+      for (const member of importableMembers) {
+        const failureTitle =
+          importableMembers.length > 1
+            ? `Failed to import sessions on ${member.environmentLabel ?? "the current environment"}`
+            : "Failed to import sessions";
+        const scanned = await rescanSessions({ environmentId: member.environmentId, input: {} });
+        if (scanned._tag === "Failure") {
+          reportFailure(
+            failureTitle,
+            mapAtomCommandResult(scanned, () => undefined),
+          );
+          continue;
+        }
         const result = await importSessions({
           environmentId: member.environmentId,
           input: { projectId: member.id, expectedWorkspaceRoot: member.workspaceRoot },
         });
         if (result._tag === "Failure") {
           reportFailure(
-            group.memberProjects.length > 1
-              ? `Failed to import sessions on ${member.environmentLabel ?? "the current environment"}`
-              : "Failed to import sessions",
+            failureTitle,
             mapAtomCommandResult(result, () => undefined),
           );
           continue;
@@ -327,18 +342,17 @@ function ProjectDetail({
       setIsImportingSessions(false);
     }
     if (succeededCount === 0) return;
-    toastManager.add({
-      type: skippedCount > 0 ? "warning" : "success",
-      title: skippedCount > 0 ? "Some sessions could not be imported" : "Sessions imported",
-      description: [
-        `${importedCount} recent ${importedCount === 1 ? "session is" : "sessions are"} in this project.`,
-        ...(skippedCount > 0
-          ? [
-              `${skippedCount} ${skippedCount === 1 ? "session" : "sessions"} could not be imported.`,
-            ]
-          : []),
-      ].join(" "),
-    });
+    // importedCount includes sessions an earlier run already imported.
+    const imported = `${importedCount} ${importedCount === 1 ? "session" : "sessions"} from the last 30 days ${importedCount === 1 ? "is" : "are"} imported.`;
+    toastManager.add(
+      skippedCount > 0
+        ? {
+            type: "warning",
+            title: "Some sessions were not imported",
+            description: `${imported} ${skippedCount} ${skippedCount === 1 ? "was" : "were"} not. Import again to continue a large batch.`,
+          }
+        : { type: "success", title: "Sessions imported", description: imported },
+    );
   };
 
   const [faviconPickerOpen, setFaviconPickerOpen] = useComposerMenuState(!canEditGroup);
@@ -602,7 +616,7 @@ function ProjectDetail({
                 size="sm"
                 variant="outline"
                 type="button"
-                disabled={isImportingSessions || !canEditGroup}
+                disabled={isImportingSessions || importableMembers.length === 0}
                 onClick={() => void importMemberSessions()}
               >
                 <DownloadIcon />
