@@ -566,6 +566,18 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     }),
   );
 
+  it.effect("keeps the native updater for a desktop-named junction into a standalone install", () =>
+    Effect.gen(function* () {
+      const capabilities = yield* resolveInstall({
+        definition: codexUpdate,
+        resolved: "D:\\Tools\\OpenAI\\Codex\\bin\\codex.exe",
+        real: "C:\\Users\\me\\.codex\\packages\\standalone\\releases\\0.120.0-x86_64\\bin\\codex.exe",
+      });
+
+      expect(capabilities.update).toMatchObject({ args: ["update"], lockKey: "codex-native" });
+    }),
+  );
+
   it.effect.each([
     {
       name: "the default home",

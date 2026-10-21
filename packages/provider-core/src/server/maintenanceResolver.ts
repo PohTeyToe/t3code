@@ -465,11 +465,13 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
     return manual;
   }
   // The Codex desktop app replaces these copies when it updates itself; `codex update` on one
-  // fails with "Could not detect the Codex installation method" and exits 1.
+  // fails with "Could not detect the Codex installation method" and exits 1. Only the real path
+  // decides, so a junction named like the app's folder that targets a standalone install keeps
+  // its updater.
   if (
     definition.provider === "codex" &&
     context.platform === "win32" &&
-    commandPaths.some(isCodexDesktopCommandPath)
+    isCodexDesktopCommandPath(context.realCommandPath)
   ) {
     return manual;
   }
