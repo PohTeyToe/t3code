@@ -536,6 +536,11 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
       real: codexDesktopAppServer,
     },
     {
+      name: "a redirected local app data folder",
+      resolved: "D:\\LocalAppData\\OpenAI\\Codex\\bin\\6257d9e8f63c0f2b\\codex.exe",
+      real: "D:\\LocalAppData\\OpenAI\\Codex\\bin\\6257d9e8f63c0f2b\\codex.exe",
+    },
+    {
       name: "a custom CODEX_HOME",
       resolved: "D:\\codex-home\\plugins\\.plugin-appserver\\codex.exe",
       real: "D:\\codex-home\\plugins\\.plugin-appserver\\codex.exe",

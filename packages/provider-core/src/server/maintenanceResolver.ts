@@ -253,9 +253,10 @@ function isWinGetClaudeCommandPath(commandPath: string): boolean {
 /**
  * The Codex desktop app's own CLI copies on Windows: the versioned binaries under
  * `%LOCALAPPDATA%\OpenAI\Codex\bin` and the copy it keeps at `<CODEX_HOME>\plugins\.plugin-appserver`.
+ * The standalone installer's `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` is not one of them.
  */
 const codexDesktopCommandPath =
-  /^[a-z]:\/users\/[^/]+\/appdata\/local\/openai\/codex\/bin\/(?:[^/]+\/)?codex\.exe$|\/plugins\/\.plugin-appserver\/codex\.exe$/;
+  /(?<!\/programs)\/openai\/codex\/bin\/(?:[^/]+\/)?codex\.exe$|\/plugins\/\.plugin-appserver\/codex\.exe$/;
 
 function isCodexDesktopCommandPath(commandPath: string): boolean {
   return codexDesktopCommandPath.test(normalizeCommandPath(commandPath));
