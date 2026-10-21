@@ -566,6 +566,48 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     }),
   );
 
+  it.effect.each([
+    {
+      name: "the ChatGPT.app bundled CLI",
+      resolved: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+      real: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+    },
+    {
+      name: "the Codex.app bundled CLI",
+      resolved: "/Applications/Codex.app/Contents/Resources/codex",
+      real: "/Applications/Codex.app/Contents/Resources/codex",
+    },
+    {
+      name: "a launcher symlink into an app bundle",
+      resolved: "/usr/local/bin/codex",
+      real: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+    },
+  ] as const)("keeps a macOS app-bundled CLI manual-only through $name", (fixture) =>
+    Effect.gen(function* () {
+      const capabilities = yield* resolveInstall({
+        definition: codexUpdate,
+        platform: "darwin",
+        ...fixture,
+      });
+
+      expect(capabilities.update).toBeNull();
+    }),
+  );
+
+  it.effect("keeps the native updater for a macOS standalone install", () =>
+    Effect.gen(function* () {
+      const standalone = "/Users/me/.codex/packages/standalone/current/bin/codex";
+      const capabilities = yield* resolveInstall({
+        definition: codexUpdate,
+        platform: "darwin",
+        resolved: standalone,
+        real: standalone,
+      });
+
+      expect(capabilities.update).toMatchObject({ args: ["update"], lockKey: "codex-native" });
+    }),
+  );
+
   it.effect("keeps the native updater for a desktop-named junction into a standalone install", () =>
     Effect.gen(function* () {
       const capabilities = yield* resolveInstall({

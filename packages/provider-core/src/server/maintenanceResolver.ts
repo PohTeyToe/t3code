@@ -262,6 +262,20 @@ function isCodexDesktopCommandPath(commandPath: string): boolean {
   return codexDesktopCommandPath.test(normalizeCommandPath(commandPath));
 }
 
+/**
+ * An executable a desktop app ships and replaces when the app updates: on macOS anything inside an
+ * app bundle (`ChatGPT.app/Contents/Resources/codex-cli/bin/codex`), on Windows the Codex desktop
+ * app's copies. Their own updaters cannot detect that installation.
+ */
+function isDesktopAppCommandPath(
+  provider: ProviderDriverKind,
+  platform: NodeJS.Platform,
+  commandPath: string,
+): boolean {
+  if (platform === "darwin") return normalizeCommandPath(commandPath).includes(".app/contents/");
+  return platform === "win32" && provider === "codex" && isCodexDesktopCommandPath(commandPath);
+}
+
 function isPnpmGlobalCommandPath(commandPath: string): boolean {
   const normalized = normalizeCommandPath(commandPath);
   return (
@@ -464,15 +478,10 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
   ) {
     return manual;
   }
-  // The Codex desktop app replaces these copies when it updates itself; `codex update` on one
-  // fails with "Could not detect the Codex installation method" and exits 1. Only the real path
-  // decides, so a junction named like the app's folder that targets a standalone install keeps
-  // its updater.
-  if (
-    definition.provider === "codex" &&
-    context.platform === "win32" &&
-    isCodexDesktopCommandPath(context.realCommandPath)
-  ) {
+  // A desktop app replaces its own copies when it updates; `codex update` on one fails with
+  // "Could not detect the Codex installation method" and exits 1. Only the real path decides, so
+  // a link named like the app's folder that targets a standalone install keeps its updater.
+  if (isDesktopAppCommandPath(definition.provider, context.platform, context.realCommandPath)) {
     return manual;
   }
 
