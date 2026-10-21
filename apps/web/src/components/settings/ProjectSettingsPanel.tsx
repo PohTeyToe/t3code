@@ -309,27 +309,22 @@ function ProjectDetail({
     let importedCount = 0;
     let skippedCount = 0;
     let succeededCount = 0;
+    let scanTruncated = false;
     try {
       for (const member of importableMembers) {
-        const failureTitle =
-          importableMembers.length > 1
-            ? `Failed to import sessions on ${member.environmentLabel ?? "the current environment"}`
-            : "Failed to import sessions";
+        // The scanner refreshes its candidates before anything that can fail the scan, and import
+        // falls back to its own discovery, so a failed rescan still leaves import worth running.
         const scanned = await rescanSessions({ environmentId: member.environmentId, input: {} });
-        if (scanned._tag === "Failure") {
-          reportFailure(
-            failureTitle,
-            mapAtomCommandResult(scanned, () => undefined),
-          );
-          continue;
-        }
+        if (scanned._tag === "Success" && scanned.value.truncated === true) scanTruncated = true;
         const result = await importSessions({
           environmentId: member.environmentId,
           input: { projectId: member.id, expectedWorkspaceRoot: member.workspaceRoot },
         });
         if (result._tag === "Failure") {
           reportFailure(
-            failureTitle,
+            importableMembers.length > 1
+              ? `Failed to import sessions on ${member.environmentLabel ?? "the current environment"}`
+              : "Failed to import sessions",
             mapAtomCommandResult(result, () => undefined),
           );
           continue;
@@ -343,15 +338,28 @@ function ProjectDetail({
     }
     if (succeededCount === 0) return;
     // importedCount includes sessions an earlier run already imported.
-    const imported = `${importedCount} ${importedCount === 1 ? "session" : "sessions"} from the last 30 days ${importedCount === 1 ? "is" : "are"} imported.`;
+    const notes = [
+      `${importedCount} ${importedCount === 1 ? "session" : "sessions"} from the last 30 days ${importedCount === 1 ? "is" : "are"} imported.`,
+      ...(skippedCount > 0
+        ? [
+            `${skippedCount} ${skippedCount === 1 ? "was" : "were"} not; import again to continue a large batch.`,
+          ]
+        : []),
+      ...(scanTruncated
+        ? ["There were too many conversations to scan, so some may be missing."]
+        : []),
+    ].join(" ");
     toastManager.add(
-      skippedCount > 0
-        ? {
-            type: "warning",
-            title: "Some sessions were not imported",
-            description: `${imported} ${skippedCount} ${skippedCount === 1 ? "was" : "were"} not. Import again to continue a large batch.`,
-          }
-        : { type: "success", title: "Sessions imported", description: imported },
+      skippedCount > 0 || scanTruncated
+        ? { type: "warning", title: "Some sessions were not imported", description: notes }
+        : importedCount === 0
+          ? {
+              type: "info",
+              title: "No sessions to import",
+              description:
+                "No Claude Code or Codex conversations from the last 30 days ran in this folder.",
+            }
+          : { type: "success", title: "Sessions imported", description: notes },
     );
   };
 
