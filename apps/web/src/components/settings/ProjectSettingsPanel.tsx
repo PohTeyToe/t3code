@@ -309,13 +309,13 @@ function ProjectDetail({
     let importedCount = 0;
     let skippedCount = 0;
     let succeededCount = 0;
-    let scanTruncated = false;
+    let scanIncomplete = false;
     try {
       for (const member of importableMembers) {
-        // The scanner refreshes its candidates before anything that can fail the scan, and import
-        // falls back to its own discovery, so a failed rescan still leaves import worth running.
+        // A failed rescan may still have refreshed what import reads, so import anyway and say the
+        // result may be missing sessions rather than claiming there were none.
         const scanned = await rescanSessions({ environmentId: member.environmentId, input: {} });
-        if (scanned._tag === "Success" && scanned.value.truncated === true) scanTruncated = true;
+        if (scanned._tag === "Failure" || scanned.value.truncated === true) scanIncomplete = true;
         const result = await importSessions({
           environmentId: member.environmentId,
           input: { projectId: member.id, expectedWorkspaceRoot: member.workspaceRoot },
@@ -345,13 +345,18 @@ function ProjectDetail({
             `${skippedCount} ${skippedCount === 1 ? "was" : "were"} not; import again to continue a large batch.`,
           ]
         : []),
-      ...(scanTruncated
-        ? ["There were too many conversations to scan, so some may be missing."]
+      ...(scanIncomplete
+        ? ["The scan for new conversations did not finish, so some may be missing."]
         : []),
     ].join(" ");
     toastManager.add(
-      skippedCount > 0 || scanTruncated
-        ? { type: "warning", title: "Some sessions were not imported", description: notes }
+      skippedCount > 0 || scanIncomplete
+        ? {
+            type: "warning",
+            title:
+              skippedCount > 0 ? "Some sessions were not imported" : "Some sessions may be missing",
+            description: notes,
+          }
         : importedCount === 0
           ? {
               type: "info",
