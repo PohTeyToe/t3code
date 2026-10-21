@@ -251,29 +251,19 @@ function isWinGetClaudeCommandPath(commandPath: string): boolean {
 }
 
 /**
- * The Codex desktop app's own CLI copies on Windows: the versioned binaries under
- * `%LOCALAPPDATA%\OpenAI\Codex\bin` and the copy it keeps at `<CODEX_HOME>\plugins\.plugin-appserver`.
- * The standalone installer's `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` is not one of them.
+ * CLI copies the Codex desktop apps ship and replace when they update. On Windows: the versioned
+ * binaries under `%LOCALAPPDATA%\OpenAI\Codex\bin` and the copy kept at
+ * `<CODEX_HOME>\plugins\.plugin-appserver`, but not the standalone installer's
+ * `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`. On macOS: the CLI inside ChatGPT.app or Codex.app.
  */
-const codexDesktopCommandPath =
-  /(?<!\/programs)\/openai\/codex\/bin\/(?:[^/]+\/)?codex\.exe$|\/plugins\/\.plugin-appserver\/codex\.exe$/;
+const codexDesktopCommandPath: Partial<Record<NodeJS.Platform, RegExp>> = {
+  win32:
+    /(?<!\/programs)\/openai\/codex\/bin\/(?:[^/]+\/)?codex\.exe$|\/plugins\/\.plugin-appserver\/codex\.exe$/,
+  darwin: /\/(?:chatgpt|codex)\.app\/contents\/resources\//,
+};
 
-function isCodexDesktopCommandPath(commandPath: string): boolean {
-  return codexDesktopCommandPath.test(normalizeCommandPath(commandPath));
-}
-
-/**
- * An executable a desktop app ships and replaces when the app updates: on macOS anything inside an
- * app bundle (`ChatGPT.app/Contents/Resources/codex-cli/bin/codex`), on Windows the Codex desktop
- * app's copies. Their own updaters cannot detect that installation.
- */
-function isDesktopAppCommandPath(
-  provider: ProviderDriverKind,
-  platform: NodeJS.Platform,
-  commandPath: string,
-): boolean {
-  if (platform === "darwin") return normalizeCommandPath(commandPath).includes(".app/contents/");
-  return platform === "win32" && provider === "codex" && isCodexDesktopCommandPath(commandPath);
+function isCodexDesktopCommandPath(platform: NodeJS.Platform, commandPath: string): boolean {
+  return codexDesktopCommandPath[platform]?.test(normalizeCommandPath(commandPath)) ?? false;
 }
 
 function isPnpmGlobalCommandPath(commandPath: string): boolean {
@@ -478,10 +468,13 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
   ) {
     return manual;
   }
-  // A desktop app replaces its own copies when it updates; `codex update` on one fails with
+  // A Codex desktop app replaces its own copies when it updates; `codex update` on one fails with
   // "Could not detect the Codex installation method" and exits 1. Only the real path decides, so
   // a link named like the app's folder that targets a standalone install keeps its updater.
-  if (isDesktopAppCommandPath(definition.provider, context.platform, context.realCommandPath)) {
+  if (
+    definition.provider === "codex" &&
+    isCodexDesktopCommandPath(context.platform, context.realCommandPath)
+  ) {
     return manual;
   }
 

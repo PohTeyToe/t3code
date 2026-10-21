@@ -594,9 +594,11 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     }),
   );
 
-  it.effect("keeps the native updater for a macOS standalone install", () =>
+  it.effect.each([
+    "/Users/me/.codex/packages/standalone/current/bin/codex",
+    "/Users/me/Tools.app/Contents/.codex/packages/standalone/current/bin/codex",
+  ])("keeps the native updater for a macOS standalone install at %s", (standalone) =>
     Effect.gen(function* () {
-      const standalone = "/Users/me/.codex/packages/standalone/current/bin/codex";
       const capabilities = yield* resolveInstall({
         definition: codexUpdate,
         platform: "darwin",
