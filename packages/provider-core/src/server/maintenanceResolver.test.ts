@@ -511,6 +511,56 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     }),
   );
 
+  const codexUpdate = {
+    provider: driver("codex"),
+    npmPackageName: "@openai/codex",
+    nativeUpdate: {
+      args: ["update"],
+      isCommandPath: isNativeTestCommandPath("/packages/standalone/"),
+    },
+  };
+  const codexDesktopBin =
+    "C:\\Users\\me\\AppData\\Local\\OpenAI\\Codex\\bin\\6257d9e8f63c0f2b\\codex.exe";
+  const codexDesktopAppServer = "C:\\Users\\me\\.codex\\plugins\\.plugin-appserver\\codex.exe";
+
+  it.effect.each([
+    { name: "a versioned desktop binary", resolved: codexDesktopBin, real: codexDesktopBin },
+    {
+      name: "the legacy unversioned desktop binary",
+      resolved: "C:\\Users\\me\\AppData\\Local\\OpenAI\\Codex\\bin\\codex.exe",
+      real: "C:\\Users\\me\\AppData\\Local\\OpenAI\\Codex\\bin\\codex.exe",
+    },
+    {
+      name: "the plugin app-server copy",
+      resolved: codexDesktopAppServer,
+      real: codexDesktopAppServer,
+    },
+    {
+      name: "a custom CODEX_HOME",
+      resolved: "D:\\codex-home\\plugins\\.plugin-appserver\\codex.exe",
+      real: "D:\\codex-home\\plugins\\.plugin-appserver\\codex.exe",
+    },
+  ] as const)("keeps a Codex desktop app copy manual-only through $name", (fixture) =>
+    Effect.gen(function* () {
+      const capabilities = yield* resolveInstall({ definition: codexUpdate, ...fixture });
+
+      expect(capabilities.update).toBeNull();
+    }),
+  );
+
+  it.effect("keeps the native updater for a Codex standalone install", () =>
+    Effect.gen(function* () {
+      const standalone = "C:\\Users\\me\\.codex\\packages\\standalone\\current\\bin\\codex.exe";
+      const capabilities = yield* resolveInstall({
+        definition: codexUpdate,
+        resolved: "C:\\Users\\me\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe",
+        real: standalone,
+      });
+
+      expect(capabilities.update).toMatchObject({ args: ["update"], lockKey: "codex-native" });
+    }),
+  );
+
   it.effect.each([
     {
       name: "the default home",

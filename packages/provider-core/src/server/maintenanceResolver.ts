@@ -250,6 +250,17 @@ function isWinGetClaudeCommandPath(commandPath: string): boolean {
   return winGetClaudeCommandPath.test(normalizeCommandPath(commandPath));
 }
 
+/**
+ * The Codex desktop app's own CLI copies on Windows: the versioned binaries under
+ * `%LOCALAPPDATA%\OpenAI\Codex\bin` and the copy it keeps at `<CODEX_HOME>\plugins\.plugin-appserver`.
+ */
+const codexDesktopCommandPath =
+  /^[a-z]:\/users\/[^/]+\/appdata\/local\/openai\/codex\/bin\/(?:[^/]+\/)?codex\.exe$|\/plugins\/\.plugin-appserver\/codex\.exe$/;
+
+function isCodexDesktopCommandPath(commandPath: string): boolean {
+  return codexDesktopCommandPath.test(normalizeCommandPath(commandPath));
+}
+
 function isPnpmGlobalCommandPath(commandPath: string): boolean {
   const normalized = normalizeCommandPath(commandPath);
   return (
@@ -449,6 +460,15 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
     definition.provider === "claudeAgent" &&
     context.platform === "win32" &&
     commandPaths.some(isWinGetClaudeCommandPath)
+  ) {
+    return manual;
+  }
+  // The Codex desktop app replaces these copies when it updates itself; `codex update` on one
+  // fails with "Could not detect the Codex installation method" and exits 1.
+  if (
+    definition.provider === "codex" &&
+    context.platform === "win32" &&
+    commandPaths.some(isCodexDesktopCommandPath)
   ) {
     return manual;
   }
