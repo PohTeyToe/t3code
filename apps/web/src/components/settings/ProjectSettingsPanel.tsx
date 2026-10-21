@@ -15,7 +15,7 @@ import { AsyncResult } from "effect/reactivity";
 import { type EnvironmentId, type ProjectIconOverride } from "@t3tools/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
-import { InfoIcon, Trash2Icon } from "lucide-react";
+import { DownloadIcon, InfoIcon, Trash2Icon } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
@@ -25,6 +25,7 @@ import {
   type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../../sidebarProjectGrouping";
+import { agentSessionImport } from "../../state/agentSessions";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { useThreadShells, waitForProjectRemoval } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
@@ -185,6 +186,7 @@ function ProjectDetail({
   const deleteProject = useOrchestrationCommand(projectEnvironment.delete, {
     reportFailure: false,
   });
+  const importSessions = useOrchestrationCommand(agentSessionImport, { reportFailure: false });
   const projectNameEditedRef = useRef(false);
 
   const faviconPath = representative.faviconPath ?? null;
@@ -291,6 +293,52 @@ function ProjectDetail({
       return;
     }
     await updateAllMembers({ title }, "Failed to rename project");
+  };
+
+  // Onboarding imports in bulk; this reruns the same idempotent import for a project that
+  // already exists, e.g. to pick up sessions started in a terminal after setup.
+  const [isImportingSessions, setIsImportingSessions] = useState(false);
+  const importMemberSessions = async () => {
+    setIsImportingSessions(true);
+    let importedCount = 0;
+    let skippedCount = 0;
+    let succeededCount = 0;
+    try {
+      // One offline checkout must not block the others.
+      for (const member of group.memberProjects) {
+        const result = await importSessions({
+          environmentId: member.environmentId,
+          input: { projectId: member.id, expectedWorkspaceRoot: member.workspaceRoot },
+        });
+        if (result._tag === "Failure") {
+          reportFailure(
+            group.memberProjects.length > 1
+              ? `Failed to import sessions on ${member.environmentLabel ?? "the current environment"}`
+              : "Failed to import sessions",
+            mapAtomCommandResult(result, () => undefined),
+          );
+          continue;
+        }
+        succeededCount += 1;
+        importedCount += result.value.importedCount;
+        skippedCount += result.value.skippedCount;
+      }
+    } finally {
+      setIsImportingSessions(false);
+    }
+    if (succeededCount === 0) return;
+    toastManager.add({
+      type: skippedCount > 0 ? "warning" : "success",
+      title: skippedCount > 0 ? "Some sessions could not be imported" : "Sessions imported",
+      description: [
+        `${importedCount} recent ${importedCount === 1 ? "session is" : "sessions are"} in this project.`,
+        ...(skippedCount > 0
+          ? [
+              `${skippedCount} ${skippedCount === 1 ? "session" : "sessions"} could not be imported.`,
+            ]
+          : []),
+      ].join(" "),
+    });
   };
 
   const [faviconPickerOpen, setFaviconPickerOpen] = useComposerMenuState(!canEditGroup);
@@ -544,6 +592,22 @@ function ProjectDetail({
                   Choose file
                 </Button>
               </div>
+            }
+          />
+          <SettingsRow
+            title="Import sessions"
+            description="Adds Claude Code and Codex conversations from the last 30 days that ran in this project's folder. Already imported conversations are skipped."
+            control={
+              <Button
+                size="sm"
+                variant="outline"
+                type="button"
+                disabled={isImportingSessions || !canEditGroup}
+                onClick={() => void importMemberSessions()}
+              >
+                <DownloadIcon />
+                {isImportingSessions ? "Importing…" : "Import"}
+              </Button>
             }
           />
         </SettingsSection>
