@@ -555,8 +555,19 @@ function isT3ManagedWorktree(
   );
 }
 
-// false stops metadata scanning for an excluded rollout, even if later records contain a cwd.
-function extractCwd(line: string, source: AgentSessionSource): string | null | false {
+// Setup records ahead of a Claude transcript's first prompt carry its cwd; the prompt itself
+// tells a headless run apart.
+interface ClaudeTranscriptStart {
+  cwd: string | null;
+  renamed: boolean;
+}
+
+// false stops metadata scanning for an excluded transcript, even if later records contain a cwd.
+function extractCwd(
+  line: string,
+  source: AgentSessionSource,
+  claudeStart: ClaudeTranscriptStart,
+): string | null | false {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
@@ -566,18 +577,37 @@ function extractCwd(line: string, source: AgentSessionSource): string | null | f
   if (typeof parsed !== "object" || parsed === null) return null;
 
   const record = parsed as Record<string, unknown>;
+  if (source === "claudeAgent" && record.type === "custom-title") claudeStart.renamed = true;
   if (typeof record.cwd === "string" && record.cwd.trim().length > 0) {
-    return record.cwd;
+    // `claude -p` and other SDK runs log an `sdk-*` entrypoint, as do apps that host chats
+    // through the SDK. An unrenamed run whose first prompt no person typed is a headless worker.
+    if (
+      source !== "claudeAgent" ||
+      claudeStart.renamed ||
+      typeof record.entrypoint !== "string" ||
+      !record.entrypoint.startsWith("sdk-")
+    ) {
+      return record.cwd;
+    }
+    if (record.type !== "user" || record.isMeta === true) {
+      claudeStart.cwd ??= record.cwd;
+      return null;
+    }
+    return typeof record.turnOrigin === "string" && record.turnOrigin !== "human"
+      ? false
+      : record.cwd;
   }
   const payload = record.payload;
   if (typeof payload === "object" && payload !== null) {
     if (source === "codex" && record.type === "session_meta") {
       const sessionSource = (payload as Record<string, unknown>).source;
+      // `exec` marks a headless run: `codex exec`, or a background task of the desktop app.
       if (
-        typeof sessionSource === "object" &&
-        sessionSource !== null &&
-        !Array.isArray(sessionSource) &&
-        (Object.hasOwn(sessionSource, "subagent") || Object.hasOwn(sessionSource, "subAgent"))
+        sessionSource === "exec" ||
+        (typeof sessionSource === "object" &&
+          sessionSource !== null &&
+          !Array.isArray(sessionSource) &&
+          (Object.hasOwn(sessionSource, "subagent") || Object.hasOwn(sessionSource, "subAgent")))
       ) {
         return false;
       }
@@ -746,6 +776,7 @@ export const make = Effect.gen(function* () {
       return null;
     }
     budget.operationsRemaining -= 1;
+    const claudeStart: ClaudeTranscriptStart = { cwd: null, renamed: false };
     return yield* Effect.scoped(
       fileSystem.open(transcript.filePath, { flag: "r" }).pipe(
         Effect.flatMap((file) =>
@@ -771,7 +802,7 @@ export const make = Effect.gen(function* () {
               const record = remaining + decoder.decode();
               return record.length === 0 || !reserveRecord()
                 ? null
-                : extractCwd(record.trim(), source);
+                : extractCwd(record.trim(), source, claudeStart);
             };
 
             while (bytesRead < maxBytes) {
@@ -798,20 +829,24 @@ export const make = Effect.gen(function* () {
 
               for (const line of lines) {
                 if (!reserveRecord()) return null;
-                const cwd = extractCwd(line.trim(), source);
+                const cwd = extractCwd(line.trim(), source, claudeStart);
                 if (cwd !== null) return cwd;
               }
             }
 
             if (bytesRead < transcript.size) {
-              budget.truncated = true;
+              if (claudeStart.cwd === null) budget.truncated = true;
               return null;
             }
             return readLastRecord();
           }),
         ),
       ),
-    ).pipe(Effect.orElseSucceed(() => null));
+    ).pipe(
+      Effect.orElseSucceed(() => null),
+      // A Claude prompt beyond the read limits keeps the transcript eligible.
+      Effect.map((cwd) => cwd ?? claudeStart.cwd),
+    );
   });
 
   const readTranscript = Effect.fn("AgentSessionScanner.readTranscript")(function* (

@@ -1109,7 +1109,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
       }),
     );
 
-    it.effect("excludes Codex subagents from discovery and the recent-thread budget", () =>
+    it.effect("excludes Codex subagents and headless runs from discovery and the budget", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
@@ -1122,10 +1122,11 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
           { subagent: "review" },
           { subagent: { other: "guardian" } },
           { subAgent: "compact" },
+          "exec",
         ];
         // Newer subagents would exhaust the 100-transcript import budget before any parent.
         const sources = [
-          ...Array.from({ length: 100 }, (_, index) => subagentSources[index % 4]),
+          ...Array.from({ length: 100 }, (_, index) => subagentSources[index % 5]),
           "vscode",
           undefined,
           null,
@@ -1166,6 +1167,59 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
               outcome._tag === "Importable" ? outcome.thread.providerSessionId : outcome._tag,
             ),
           ).toEqual(["session-100", "session-101", "session-102", "session-103"]);
+        }).pipe(Effect.provide(layerScannerTest({ claudeHomePath, codexHomePath })));
+      }),
+    );
+
+    it.effect("excludes headless Claude runs from discovery and the recent-thread budget", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+        yield* TestClock.setTime(nowMs);
+        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
+        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
+        const workspace = yield* makeTempDir("t3code-workspace-");
+        const prompt = (sessionId: string, fields: Record<string, unknown>) => [
+          // Setup records with a cwd come before the first prompt.
+          { type: "attachment", sessionId, cwd: workspace, entrypoint: fields.entrypoint },
+          {
+            type: "user",
+            sessionId,
+            cwd: workspace,
+            ...fields,
+            message: { role: "user", content: "Import this prompt" },
+          },
+        ];
+        const headless = { entrypoint: "sdk-cli", turnOrigin: "sdk" };
+        const transcripts = [
+          // `claude -p` workers would exhaust the 100-transcript import budget.
+          ...Array.from({ length: 100 }, (_, index) => prompt(`headless-${index}`, headless)),
+          prompt("typed", { entrypoint: "sdk-cli", turnOrigin: "human" }),
+          [
+            { type: "custom-title", customTitle: "Renamed", sessionId: "renamed" },
+            ...prompt("renamed", headless),
+          ],
+          prompt("interactive", { entrypoint: "cli" }),
+          prompt("older-sdk", { entrypoint: "sdk-cli" }),
+        ];
+        for (const [index, records] of transcripts.entries()) {
+          yield* writeTranscript({
+            filePath: path.join(claudeHomePath, "projects", "-slug", `${index}.jsonl`),
+            contents: records.map((record) => encodeTranscriptRecord(record)).join("\n"),
+            mtimeMs: nowMs - index * 60_000,
+          });
+        }
+
+        yield* Effect.gen(function* () {
+          const scanner = yield* AgentSessionScanner.AgentSessionScanner;
+          const scan = yield* scanner.scan;
+          expect.soft(scan.candidates.map((candidate) => candidate.threadCount)).toEqual([4]);
+          const outcomes = yield* Stream.runCollect(scanner.recentThreads(workspace));
+          expect(
+            outcomes.map((outcome) =>
+              outcome._tag === "Importable" ? outcome.thread.providerSessionId : outcome._tag,
+            ),
+          ).toEqual(["typed", "renamed", "interactive", "older-sdk"]);
         }).pipe(Effect.provide(layerScannerTest({ claudeHomePath, codexHomePath })));
       }),
     );
