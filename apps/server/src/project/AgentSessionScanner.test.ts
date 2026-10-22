@@ -1179,9 +1179,14 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
         const codexHomePath = yield* makeTempDir("t3code-codex-home-");
         const workspace = yield* makeTempDir("t3code-workspace-");
-        const prompt = (sessionId: string, fields: Record<string, unknown>) => [
+        const elsewhere = yield* makeTempDir("t3code-elsewhere-");
+        const prompt = (
+          sessionId: string,
+          fields: Record<string, unknown>,
+          setup: Record<string, unknown> = { entrypoint: fields.entrypoint },
+        ) => [
           // Setup records with a cwd come before the first prompt.
-          { type: "attachment", sessionId, cwd: workspace, entrypoint: fields.entrypoint },
+          { type: "attachment", sessionId, cwd: workspace, ...setup },
           {
             type: "user",
             sessionId,
@@ -1193,8 +1198,11 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         const headless = { entrypoint: "sdk-cli", turnOrigin: "sdk" };
         const transcripts = [
           // `claude -p` workers would exhaust the 100-transcript import budget.
-          ...Array.from({ length: 100 }, (_, index) => prompt(`headless-${index}`, headless)),
-          prompt("typed", { entrypoint: "sdk-cli", turnOrigin: "human" }),
+          ...Array.from({ length: 100 }, (_, index) =>
+            prompt(`headless-${index}`, headless, index % 2 === 0 ? {} : undefined),
+          ),
+          // Transcript reading keeps the first cwd, so discovery must too.
+          prompt("typed", { entrypoint: "sdk-cli", turnOrigin: "human", cwd: elsewhere }),
           [
             { type: "custom-title", customTitle: "Renamed", sessionId: "renamed" },
             ...prompt("renamed", headless),

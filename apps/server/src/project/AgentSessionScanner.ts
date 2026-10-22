@@ -562,6 +562,33 @@ interface ClaudeTranscriptStart {
   renamed: boolean;
 }
 
+// `claude -p` and other SDK runs log an `sdk-*` entrypoint, as do apps that host chats through
+// the SDK. An unrenamed run whose first prompt no person typed is a headless worker. Like
+// transcript reading, this keeps the first cwd.
+function extractClaudeCwd(
+  record: Record<string, unknown>,
+  start: ClaudeTranscriptStart,
+): string | null | false {
+  if (record.type === "custom-title") start.renamed = true;
+  const payload = record.payload;
+  const nestedCwd =
+    typeof payload === "object" && payload !== null
+      ? (payload as Record<string, unknown>).cwd
+      : undefined;
+  const cwd = [record.cwd, nestedCwd].find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  if (cwd !== undefined) start.cwd ??= cwd;
+  if (start.cwd === null) return null;
+  const entrypoint = typeof record.entrypoint === "string" ? record.entrypoint : null;
+  const sdk = entrypoint?.startsWith("sdk-") === true;
+  if (start.renamed || (entrypoint !== null && !sdk)) return start.cwd;
+  if (record.type !== "user" || record.isMeta === true) return null;
+  return sdk && typeof record.turnOrigin === "string" && record.turnOrigin !== "human"
+    ? false
+    : start.cwd;
+}
+
 // false stops metadata scanning for an excluded transcript, even if later records contain a cwd.
 function extractCwd(
   line: string,
@@ -577,25 +604,9 @@ function extractCwd(
   if (typeof parsed !== "object" || parsed === null) return null;
 
   const record = parsed as Record<string, unknown>;
-  if (source === "claudeAgent" && record.type === "custom-title") claudeStart.renamed = true;
+  if (source === "claudeAgent") return extractClaudeCwd(record, claudeStart);
   if (typeof record.cwd === "string" && record.cwd.trim().length > 0) {
-    // `claude -p` and other SDK runs log an `sdk-*` entrypoint, as do apps that host chats
-    // through the SDK. An unrenamed run whose first prompt no person typed is a headless worker.
-    if (
-      source !== "claudeAgent" ||
-      claudeStart.renamed ||
-      typeof record.entrypoint !== "string" ||
-      !record.entrypoint.startsWith("sdk-")
-    ) {
-      return record.cwd;
-    }
-    if (record.type !== "user" || record.isMeta === true) {
-      claudeStart.cwd ??= record.cwd;
-      return null;
-    }
-    return typeof record.turnOrigin === "string" && record.turnOrigin !== "human"
-      ? false
-      : record.cwd;
+    return record.cwd;
   }
   const payload = record.payload;
   if (typeof payload === "object" && payload !== null) {
