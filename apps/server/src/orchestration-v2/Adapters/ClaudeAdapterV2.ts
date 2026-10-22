@@ -9265,7 +9265,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             resumeSessionAt !== undefined ||
             openedWithResume ||
             hasPersistedProviderTurn ||
-            (yield* readClaudeTranscriptState(nativeThreadId).pipe(
+            (yield* readClaudeTranscriptState(nativeThreadId, turnInput.runtimePolicy.cwd).pipe(
               Effect.orElseSucceed(() => "missing" as const),
             )) === "conversation";
           const queryOptions = makeClaudeQueryOptions({
@@ -9992,19 +9992,22 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         // the first prompt can leave a transcript with only metadata lines
         // ("empty"). Claude can neither resume that id nor create it again, so
         // resumeThread fails and the caller binds a fresh native session with a
-        // context handoff. A saved conversation can only be resumed.
+        // context handoff. A saved conversation can only be resumed. A relative
+        // CLAUDE_CONFIG_DIR resolves against the cwd the CLI runs in.
         const readClaudeTranscriptState = Effect.fn("ClaudeAdapterV2.readClaudeTranscriptState")(
-          function* (nativeThreadId: string) {
+          function* (nativeThreadId: string, cwd: string | null) {
             const configuredDir = adapterOptions.environment.CLAUDE_CONFIG_DIR?.trim() ?? "";
             const projectsDir = path.join(
               configuredDir.length > 0
-                ? path.resolve(session.cwd, configuredDir)
+                ? path.resolve(cwd ?? ".", configuredDir)
                 : path.join(yield* HostProcess.HomeDirectory, ".claude"),
               "projects",
             );
-            // Empty only when every copy of the id is empty; any message means
-            // the CLI may still resume it.
+            // Empty only when every copy of the id is readable and empty; any
+            // message means the CLI may still resume it. An unreadable copy
+            // without a message elsewhere leaves the answer to the CLI.
             let state: "missing" | "empty" | "conversation" = "missing";
+            let unreadable = false;
             for (const project of yield* fileSystem.readDirectory(projectsDir)) {
               const transcriptPath = path.join(projectsDir, project, `${nativeThreadId}.jsonl`);
               // Stray files beside the project dirs fail with ENOTDIR.
@@ -10020,13 +10023,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   Stream.splitLines,
                   Stream.filter(isClaudeConversationLine),
                   Stream.runHead,
+                  Effect.option,
                 );
-              if (Option.isSome(conversationLine)) {
+              if (Option.isNone(conversationLine)) {
+                unreadable = true;
+                continue;
+              }
+              if (Option.isSome(conversationLine.value)) {
                 return "conversation" as const;
               }
               state = "empty";
             }
-            return state;
+            return unreadable ? "missing" : state;
           },
         );
 
@@ -10113,7 +10121,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 // A live process holds the conversation even before saving it.
                 (yield* Ref.get(queryContext))?.nativeThreadId !== nativeThreadId &&
                 // An unreadable transcript leaves the resume to the CLI, as before.
-                (yield* readClaudeTranscriptState(nativeThreadId).pipe(
+                (yield* readClaudeTranscriptState(nativeThreadId, session.cwd).pipe(
                   Effect.orElseSucceed(() => "missing" as const),
                 )) === "empty"
               ) {

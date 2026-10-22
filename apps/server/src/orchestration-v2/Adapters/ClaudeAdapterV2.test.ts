@@ -1842,10 +1842,17 @@ describe("ClaudeAdapterV2 MCP credential channel", () => {
 });
 
 describe("ClaudeAdapterV2 native session identity", () => {
+  const SAVED_CONVERSATION = `{"type":"user","message":{"role":"user","content":"hello"},"sessionId":"native-session-identity"}
+`;
+  // Each transcript is a project dir name and its copy of the session: text, or a directory
+  // standing in for a copy that cannot be read.
   const openTurnWithOrdinal = (
     providerTurnOrdinal: number,
     nativeThreadHasTurns?: boolean,
-    savedTranscript?: string,
+    options: {
+      readonly transcripts?: ReadonlyArray<readonly [project: string, content: string | null]>;
+      readonly relativeConfigDir?: boolean;
+    } = {},
   ) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1855,19 +1862,30 @@ describe("ClaudeAdapterV2 native session identity", () => {
         const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "t3-claude-v2-session-identity-",
         });
-        const projectDir = path.join(attachmentsDir, "projects", "-workspace");
-        yield* fileSystem.makeDirectory(projectDir, { recursive: true });
-        if (savedTranscript !== undefined) {
-          yield* fileSystem.writeFileString(
-            path.join(projectDir, "native-session-identity.jsonl"),
-            savedTranscript,
+        // A relative config dir resolves against the turn's cwd, not the session's.
+        const configDir = options.relativeConfigDir
+          ? path.join(attachmentsDir, "claude-config")
+          : attachmentsDir;
+        yield* fileSystem.makeDirectory(path.join(configDir, "projects"), { recursive: true });
+        for (const [project, content] of options.transcripts ?? []) {
+          const transcriptPath = path.join(
+            configDir,
+            "projects",
+            project,
+            "native-session-identity.jsonl",
           );
+          yield* fileSystem.makeDirectory(path.dirname(transcriptPath), { recursive: true });
+          yield* content === null
+            ? fileSystem.makeDirectory(transcriptPath)
+            : fileSystem.writeFileString(transcriptPath, content);
         }
         const openedQueries: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOpenInput> = [];
         const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
           instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
           settings: DEFAULT_CLAUDE_SETTINGS,
-          environment: { CLAUDE_CONFIG_DIR: attachmentsDir },
+          environment: {
+            CLAUDE_CONFIG_DIR: options.relativeConfigDir ? "claude-config" : attachmentsDir,
+          },
           attachmentsDir,
           fileSystem,
           path,
@@ -1919,6 +1937,14 @@ describe("ClaudeAdapterV2 native session identity", () => {
             attachments: [],
             providerTurnOrdinal,
             ...(nativeThreadHasTurns === undefined ? {} : { nativeThreadHasTurns }),
+            ...(options.relativeConfigDir
+              ? {
+                  runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+                    ...CLAUDE_TEST_RUNTIME_POLICY,
+                    cwd: attachmentsDir,
+                  }),
+                }
+              : {}),
           }),
         );
         return openedQueries;
@@ -1952,13 +1978,33 @@ describe("ClaudeAdapterV2 native session identity", () => {
   // to create a session under that id ("Session ID … is already in use").
   it.effect("resumes a saved conversation on the first turn in this app", () =>
     Effect.gen(function* () {
-      const openedQueries = yield* openTurnWithOrdinal(
-        1,
-        false,
-        `{"type":"user","message":{"role":"user","content":"hello"},"sessionId":"native-session-identity"}\n`,
-      );
+      const openedQueries = yield* openTurnWithOrdinal(1, false, {
+        transcripts: [["-workspace", SAVED_CONVERSATION]],
+      });
       assert.equal(openedQueries[0]?.options.resume, "native-session-identity");
       assert.equal(openedQueries[0]?.options.sessionId, undefined);
+    }),
+  );
+
+  it.effect("finds the saved conversation under a config dir relative to the turn's cwd", () =>
+    Effect.gen(function* () {
+      const openedQueries = yield* openTurnWithOrdinal(1, false, {
+        transcripts: [["-workspace", SAVED_CONVERSATION]],
+        relativeConfigDir: true,
+      });
+      assert.equal(openedQueries[0]?.options.resume, "native-session-identity");
+    }),
+  );
+
+  it.effect("finds the saved conversation past a copy it cannot read", () =>
+    Effect.gen(function* () {
+      const openedQueries = yield* openTurnWithOrdinal(1, false, {
+        transcripts: [
+          ["-a-unreadable", null],
+          ["-b-workspace", SAVED_CONVERSATION],
+        ],
+      });
+      assert.equal(openedQueries[0]?.options.resume, "native-session-identity");
     }),
   );
 });
