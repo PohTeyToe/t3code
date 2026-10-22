@@ -9260,8 +9260,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           // requires resume; sessionId would fail with "already in use".
           const hasPersistedProviderTurn =
             turnInput.nativeThreadHasTurns ?? turnInput.providerTurnOrdinal > 1;
+          // An imported session has a saved conversation before this app runs a turn on it.
           const shouldResume =
-            resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
+            resumeSessionAt !== undefined ||
+            openedWithResume ||
+            hasPersistedProviderTurn ||
+            (yield* readClaudeTranscriptState(nativeThreadId).pipe(
+              Effect.orElseSucceed(() => "missing" as const),
+            )) === "conversation";
           const queryOptions = makeClaudeQueryOptions({
             modelSelection: turnInput.modelSelection,
             nativeThreadId,
@@ -9982,11 +9988,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         });
         yield* Effect.addFinalizer(() => closeSession());
 
-        // A CLI stopped before it saved the first prompt can leave a transcript
-        // with only metadata lines. Claude can neither resume that id nor
-        // create it again, so resumeThread fails and the caller binds a fresh
-        // native session with a context handoff.
-        const hasEmptyClaudeTranscript = Effect.fn("ClaudeAdapterV2.hasEmptyClaudeTranscript")(
+        // What the CLI saved under a native id. A CLI stopped before it saved
+        // the first prompt can leave a transcript with only metadata lines
+        // ("empty"). Claude can neither resume that id nor create it again, so
+        // resumeThread fails and the caller binds a fresh native session with a
+        // context handoff. A saved conversation can only be resumed.
+        const readClaudeTranscriptState = Effect.fn("ClaudeAdapterV2.readClaudeTranscriptState")(
           function* (nativeThreadId: string) {
             const configuredDir = adapterOptions.environment.CLAUDE_CONFIG_DIR?.trim() ?? "";
             const projectsDir = path.join(
@@ -9997,7 +10004,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             );
             // Empty only when every copy of the id is empty; any message means
             // the CLI may still resume it.
-            let found = false;
+            let state: "missing" | "empty" | "conversation" = "missing";
             for (const project of yield* fileSystem.readDirectory(projectsDir)) {
               const transcriptPath = path.join(projectsDir, project, `${nativeThreadId}.jsonl`);
               // Stray files beside the project dirs fail with ENOTDIR.
@@ -10015,11 +10022,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   Stream.runHead,
                 );
               if (Option.isSome(conversationLine)) {
-                return false;
+                return "conversation" as const;
               }
-              found = true;
+              state = "empty";
             }
-            return found;
+            return state;
           },
         );
 
@@ -10106,9 +10113,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 // A live process holds the conversation even before saving it.
                 (yield* Ref.get(queryContext))?.nativeThreadId !== nativeThreadId &&
                 // An unreadable transcript leaves the resume to the CLI, as before.
-                (yield* hasEmptyClaudeTranscript(nativeThreadId).pipe(
-                  Effect.orElseSucceed(() => false),
-                ))
+                (yield* readClaudeTranscriptState(nativeThreadId).pipe(
+                  Effect.orElseSucceed(() => "missing" as const),
+                )) === "empty"
               ) {
                 return yield* new ProviderAdapter.ProviderAdapterProtocolError({
                   driver: CLAUDE_PROVIDER,

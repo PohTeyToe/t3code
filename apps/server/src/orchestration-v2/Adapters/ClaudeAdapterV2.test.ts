@@ -1842,22 +1842,35 @@ describe("ClaudeAdapterV2 MCP credential channel", () => {
 });
 
 describe("ClaudeAdapterV2 native session identity", () => {
-  const openTurnWithOrdinal = (providerTurnOrdinal: number, nativeThreadHasTurns?: boolean) =>
+  const openTurnWithOrdinal = (
+    providerTurnOrdinal: number,
+    nativeThreadHasTurns?: boolean,
+    savedTranscript?: string,
+  ) =>
     Effect.scoped(
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
         const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "t3-claude-v2-session-identity-",
         });
+        const projectDir = path.join(attachmentsDir, "projects", "-workspace");
+        yield* fileSystem.makeDirectory(projectDir, { recursive: true });
+        if (savedTranscript !== undefined) {
+          yield* fileSystem.writeFileString(
+            path.join(projectDir, "native-session-identity.jsonl"),
+            savedTranscript,
+          );
+        }
         const openedQueries: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOpenInput> = [];
         const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
           instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
           settings: DEFAULT_CLAUDE_SETTINGS,
-          environment: {},
+          environment: { CLAUDE_CONFIG_DIR: attachmentsDir },
           attachmentsDir,
           fileSystem,
-          path: yield* Path.Path,
+          path,
           crypto: yield* Crypto.Crypto,
           idAllocator,
           queryRunner: {
@@ -1932,6 +1945,20 @@ describe("ClaudeAdapterV2 native session identity", () => {
       const openedQueries = yield* openTurnWithOrdinal(4, false);
       assert.equal(openedQueries[0]?.options.sessionId, "native-session-identity");
       assert.equal(openedQueries[0]?.options.resume, undefined);
+    }),
+  );
+
+  // An imported session has a saved conversation but no turns in this app yet. Claude refuses
+  // to create a session under that id ("Session ID … is already in use").
+  it.effect("resumes a saved conversation on the first turn in this app", () =>
+    Effect.gen(function* () {
+      const openedQueries = yield* openTurnWithOrdinal(
+        1,
+        false,
+        `{"type":"user","message":{"role":"user","content":"hello"},"sessionId":"native-session-identity"}\n`,
+      );
+      assert.equal(openedQueries[0]?.options.resume, "native-session-identity");
+      assert.equal(openedQueries[0]?.options.sessionId, undefined);
     }),
   );
 });
